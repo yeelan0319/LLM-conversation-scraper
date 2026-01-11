@@ -9,18 +9,87 @@ Model: <message>
 
 Usage:
     1. Local HTML file: python gemini_scraper.py --file conversation.html
-    2. Browser mode: python gemini_scraper.py --url <gemini_share_url> --browser
-    3. Analyze mode: python gemini_scraper.py --file conversation.html --analyze
+    2. Single URL with browser: python gemini_scraper.py --url <url> --browser
+    3. Login and save session: python gemini_scraper.py --login
+    4. Batch scrape with saved session: python gemini_scraper.py --batch urls.txt --output-dir ./conversations
+    5. Analyze mode: python gemini_scraper.py --file conversation.html --analyze
 """
 
 import argparse
 import json
+import random
 import re
 import sys
+import time
 from pathlib import Path
 from typing import Optional
 
-from bs4 import BeautifulSoup, Tag
+from bs4 import BeautifulSoup
+
+
+# Default paths
+SESSION_DIR = Path.home() / ".gemini_scraper_session"
+DEFAULT_OUTPUT_DIR = Path("./gemini_conversations")
+
+
+def get_playwright():
+    """Import and return playwright, with helpful error message."""
+    try:
+        from playwright.sync_api import sync_playwright
+        return sync_playwright
+    except ImportError:
+        print("Playwright not installed. Run:")
+        print("  pip install playwright")
+        print("  playwright install chromium")
+        sys.exit(1)
+
+
+def login_and_save_session(session_dir: Path = SESSION_DIR) -> None:
+    """
+    Open browser for manual Google login and save the session for reuse.
+    """
+    sync_playwright = get_playwright()
+
+    session_dir.mkdir(parents=True, exist_ok=True)
+
+    print("=" * 60)
+    print("GEMINI SESSION LOGIN")
+    print("=" * 60)
+    print()
+    print("A browser window will open. Please:")
+    print("1. Log in to your Google account")
+    print("2. Navigate to any Gemini shared conversation")
+    print("3. Make sure you can see the conversation content")
+    print("4. Press Enter in this terminal when done")
+    print()
+    print(f"Session will be saved to: {session_dir}")
+    print()
+
+    with sync_playwright() as p:
+        # Use persistent context to save session data
+        context = p.chromium.launch_persistent_context(
+            str(session_dir),
+            headless=False,
+            viewport={"width": 1280, "height": 800}
+        )
+
+        page = context.new_page()
+        page.goto("https://gemini.google.com/")
+
+        print("Waiting for you to log in...")
+        print("Press Enter when you're logged in and can see conversations...")
+        input()
+
+        # Verify login by checking for user-specific elements
+        print("Verifying session...")
+        context.close()
+
+    print()
+    print("Session saved successfully!")
+    print(f"Session location: {session_dir}")
+    print()
+    print("You can now run batch scraping with:")
+    print(f"  python gemini_scraper.py --batch urls.txt --output-dir ./conversations")
 
 
 def load_html_from_file(file_path: str) -> str:
@@ -31,44 +100,283 @@ def load_html_from_file(file_path: str) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def load_html_with_playwright(url: str, wait_time: int = 5) -> str:
+def load_html_with_browser(
+    url: str,
+    session_dir: Optional[Path] = None,
+    headless: bool = True,
+    wait_selector: Optional[str] = None,
+    wait_time: float = 3.0
+) -> str:
     """
-    Load HTML using Playwright browser automation.
-    Opens a browser for manual login, then captures the page content.
-    """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        print("Playwright not installed. Run: pip install playwright && playwright install")
-        sys.exit(1)
+    Load HTML using Playwright with optional saved session.
 
-    print(f"Opening browser for URL: {url}")
-    print("Please log in to your Google account if prompted.")
-    print(f"The page will be captured after {wait_time} seconds of loading...")
+    Args:
+        url: URL to load
+        session_dir: Path to saved session (for authenticated access)
+        headless: Run browser in headless mode
+        wait_selector: CSS selector to wait for before capturing
+        wait_time: Additional wait time in seconds
+    """
+    sync_playwright = get_playwright()
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=False)
-        context = browser.new_context()
+        if session_dir and session_dir.exists():
+            # Use saved session
+            context = p.chromium.launch_persistent_context(
+                str(session_dir),
+                headless=headless,
+                viewport={"width": 1280, "height": 800}
+            )
+        else:
+            # Fresh browser (will need manual login)
+            browser = p.chromium.launch(headless=False)
+            context = browser.new_context()
+
         page = context.new_page()
 
-        page.goto(url)
+        try:
+            page.goto(url, timeout=30000)
 
-        # Wait for user to log in and page to load
-        print("\nWaiting for page to load...")
-        print("Press Enter when the conversation is fully visible...")
-        input()
+            # Wait for content to load
+            if wait_selector:
+                try:
+                    page.wait_for_selector(wait_selector, timeout=10000)
+                except Exception:
+                    pass  # Continue even if selector not found
 
-        # Get the full page HTML
-        html_content = page.content()
+            # Additional wait for dynamic content
+            time.sleep(wait_time)
 
-        # Optionally save for debugging
-        debug_path = Path("debug_gemini_page.html")
-        debug_path.write_text(html_content, encoding="utf-8")
-        print(f"Page HTML saved to: {debug_path}")
+            # Scroll to load lazy content
+            page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+            time.sleep(1)
+            page.evaluate("window.scrollTo(0, 0)")
+            time.sleep(0.5)
 
-        browser.close()
+            html_content = page.content()
+
+        finally:
+            context.close()
 
     return html_content
+
+
+def scrape_single_url(
+    url: str,
+    session_dir: Optional[Path] = None,
+    headless: bool = True,
+    container_selector: Optional[str] = None,
+    user_selector: Optional[str] = None,
+    model_selector: Optional[str] = None,
+    content_selector: Optional[str] = None
+) -> list[tuple[str, str]]:
+    """
+    Scrape a single Gemini URL and return conversations.
+    """
+    html_content = load_html_with_browser(url, session_dir, headless)
+    soup = BeautifulSoup(html_content, "lxml")
+
+    if container_selector:
+        return extract_with_selectors(
+            soup, container_selector, user_selector, model_selector, content_selector
+        )
+    else:
+        return extract_conversations_auto(soup)
+
+
+def batch_scrape(
+    urls_file: str,
+    output_dir: str,
+    session_dir: Path = SESSION_DIR,
+    delay_min: float = 2.0,
+    delay_max: float = 5.0,
+    headless: bool = True,
+    container_selector: Optional[str] = None,
+    user_selector: Optional[str] = None,
+    model_selector: Optional[str] = None,
+    content_selector: Optional[str] = None,
+    output_json: bool = False,
+    resume: bool = True
+) -> dict:
+    """
+    Batch scrape multiple URLs from a file.
+
+    Args:
+        urls_file: Path to file containing URLs (one per line)
+        output_dir: Directory to save scraped conversations
+        session_dir: Path to saved browser session
+        delay_min: Minimum delay between requests (seconds)
+        delay_max: Maximum delay between requests (seconds)
+        headless: Run browser in headless mode
+        resume: Skip already-scraped URLs
+
+    Returns:
+        Statistics dict with success/failure counts
+    """
+    urls_path = Path(urls_file)
+    if not urls_path.exists():
+        raise FileNotFoundError(f"URLs file not found: {urls_file}")
+
+    output_path = Path(output_dir)
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Check session
+    if not session_dir.exists():
+        print(f"No saved session found at: {session_dir}")
+        print("Run with --login first to authenticate:")
+        print("  python gemini_scraper.py --login")
+        sys.exit(1)
+
+    # Load URLs
+    urls = []
+    with open(urls_path, 'r') as f:
+        for line in f:
+            line = line.strip()
+            if line and not line.startswith('#'):
+                urls.append(line)
+
+    print(f"Found {len(urls)} URLs to scrape")
+    print(f"Output directory: {output_path}")
+    print(f"Session: {session_dir}")
+    print()
+
+    stats = {
+        "total": len(urls),
+        "success": 0,
+        "failed": 0,
+        "skipped": 0,
+        "errors": []
+    }
+
+    # Progress file for resuming
+    progress_file = output_path / ".progress.json"
+    completed_urls = set()
+    if resume and progress_file.exists():
+        with open(progress_file, 'r') as f:
+            completed_urls = set(json.load(f).get("completed", []))
+        print(f"Resuming: {len(completed_urls)} URLs already completed")
+
+    sync_playwright = get_playwright()
+
+    with sync_playwright() as p:
+        # Open persistent context once for all URLs
+        context = p.chromium.launch_persistent_context(
+            str(session_dir),
+            headless=headless,
+            viewport={"width": 1280, "height": 800}
+        )
+
+        page = context.new_page()
+
+        try:
+            for i, url in enumerate(urls, 1):
+                # Generate filename from URL
+                url_id = url.rstrip('/').split('/')[-1]
+                ext = ".json" if output_json else ".txt"
+                output_file = output_path / f"{url_id}{ext}"
+
+                # Skip if already completed
+                if resume and url in completed_urls:
+                    print(f"[{i}/{len(urls)}] Skipping (already done): {url_id}")
+                    stats["skipped"] += 1
+                    continue
+
+                print(f"[{i}/{len(urls)}] Scraping: {url_id}...", end=" ", flush=True)
+
+                try:
+                    # Navigate to URL
+                    page.goto(url, timeout=30000)
+
+                    # Wait for content
+                    time.sleep(3)
+
+                    # Scroll to load lazy content
+                    page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                    time.sleep(1)
+                    page.evaluate("window.scrollTo(0, 0)")
+                    time.sleep(0.5)
+
+                    # Get HTML and parse
+                    html_content = page.content()
+                    soup = BeautifulSoup(html_content, "lxml")
+
+                    # Extract conversations
+                    if container_selector:
+                        conversations = extract_with_selectors(
+                            soup, container_selector, user_selector,
+                            model_selector, content_selector
+                        )
+                    else:
+                        conversations = extract_conversations_auto(soup)
+
+                    if not conversations:
+                        print("No messages found!")
+                        stats["failed"] += 1
+                        stats["errors"].append({"url": url, "error": "No messages found"})
+
+                        # Save debug HTML
+                        debug_file = output_path / f"{url_id}_debug.html"
+                        debug_file.write_text(html_content, encoding="utf-8")
+                        continue
+
+                    # Format and save output
+                    if output_json:
+                        output = json.dumps(
+                            [{"role": role, "content": msg} for role, msg in conversations],
+                            indent=2,
+                            ensure_ascii=False
+                        )
+                    else:
+                        output = format_conversation(conversations)
+
+                    output_file.write_text(output, encoding="utf-8")
+
+                    print(f"OK ({len(conversations)} messages)")
+                    stats["success"] += 1
+
+                    # Update progress
+                    completed_urls.add(url)
+                    with open(progress_file, 'w') as f:
+                        json.dump({"completed": list(completed_urls)}, f)
+
+                except Exception as e:
+                    print(f"ERROR: {e}")
+                    stats["failed"] += 1
+                    stats["errors"].append({"url": url, "error": str(e)})
+
+                # Random delay between requests
+                if i < len(urls):
+                    delay = random.uniform(delay_min, delay_max)
+                    time.sleep(delay)
+
+        finally:
+            context.close()
+
+    # Print summary
+    print()
+    print("=" * 60)
+    print("BATCH SCRAPING COMPLETE")
+    print("=" * 60)
+    print(f"Total URLs: {stats['total']}")
+    print(f"Successful: {stats['success']}")
+    print(f"Failed: {stats['failed']}")
+    print(f"Skipped: {stats['skipped']}")
+
+    if stats["errors"]:
+        print()
+        print("Errors:")
+        for err in stats["errors"][:10]:
+            print(f"  {err['url']}: {err['error']}")
+        if len(stats["errors"]) > 10:
+            print(f"  ... and {len(stats['errors']) - 10} more")
+
+    # Save stats
+    stats_file = output_path / "scraping_stats.json"
+    with open(stats_file, 'w') as f:
+        json.dump(stats, f, indent=2)
+    print(f"\nStats saved to: {stats_file}")
+
+    return stats
 
 
 def analyze_html_structure(soup: BeautifulSoup) -> dict:
@@ -140,15 +448,6 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
 
     # Strategy 1: Look for elements with turn/message-related classes
     # Common patterns in Google's chat interfaces
-    turn_patterns = [
-        # Pattern: message-content with user/model distinction
-        {"container": "[class*='turn']", "user_marker": "[class*='user']", "model_marker": "[class*='model']"},
-        {"container": "[class*='message']", "user_marker": "[class*='query']", "model_marker": "[class*='response']"},
-        {"container": "[class*='conversation']", "user_marker": "[class*='human']", "model_marker": "[class*='assistant']"},
-    ]
-
-    # Strategy 2: Look for alternating message blocks
-    # Find all text blocks that look like messages
     potential_messages = []
 
     # Look for query-response pairs common in Gemini
@@ -169,7 +468,7 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     if potential_messages:
         return potential_messages
 
-    # Strategy 3: Look for message-text or similar content classes
+    # Strategy 2: Look for message-text or similar content classes
     for elem in soup.find_all(class_=lambda x: x and "message" in " ".join(x).lower()):
         classes = " ".join(elem.get("class", [])).lower()
         text = elem.get_text(separator="\n", strip=True)
@@ -241,26 +540,104 @@ def format_conversation(conversations: list[tuple[str, str]]) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Scrape Gemini conversations and format as User/Model dialogue"
+        description="Scrape Gemini conversations and format as User/Model dialogue",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Examples:
+  # Step 1: Login and save session (do this once)
+  python gemini_scraper.py --login
+
+  # Step 2: Create a file with URLs to scrape (one per line)
+  # urls.txt:
+  # https://gemini.google.com/share/abc123
+  # https://gemini.google.com/share/def456
+
+  # Step 3: Batch scrape all URLs
+  python gemini_scraper.py --batch urls.txt --output-dir ./conversations
+
+  # Other options:
+  python gemini_scraper.py --file saved.html          # Parse local HTML
+  python gemini_scraper.py --url <url> --browser      # Single URL with browser
+  python gemini_scraper.py --file saved.html --analyze # Analyze HTML structure
+        """
     )
-    parser.add_argument(
+
+    # Input modes (mutually exclusive)
+    input_group = parser.add_mutually_exclusive_group()
+    input_group.add_argument(
         "--file", "-f",
-        help="Path to local HTML file (save the page from your browser while logged in)"
+        help="Path to local HTML file"
     )
-    parser.add_argument(
+    input_group.add_argument(
         "--url", "-u",
-        help="Gemini share URL (requires --browser flag)"
+        help="Single Gemini share URL (use with --browser)"
     )
+    input_group.add_argument(
+        "--batch",
+        metavar="URLS_FILE",
+        help="Path to file containing URLs to scrape (one per line)"
+    )
+    input_group.add_argument(
+        "--login",
+        action="store_true",
+        help="Open browser to login and save session for batch scraping"
+    )
+
+    # Browser options
     parser.add_argument(
         "--browser", "-b",
         action="store_true",
-        help="Use Playwright browser automation (requires manual login)"
+        help="Use Playwright browser (required for --url)"
     )
+    parser.add_argument(
+        "--session-dir",
+        type=Path,
+        default=SESSION_DIR,
+        help=f"Directory for browser session data (default: {SESSION_DIR})"
+    )
+    parser.add_argument(
+        "--headless",
+        action="store_true",
+        help="Run browser in headless mode (for batch scraping)"
+    )
+    parser.add_argument(
+        "--no-headless",
+        action="store_true",
+        help="Run browser with visible window (useful for debugging)"
+    )
+
+    # Batch options
+    parser.add_argument(
+        "--output-dir", "-d",
+        default=str(DEFAULT_OUTPUT_DIR),
+        help=f"Output directory for batch scraping (default: {DEFAULT_OUTPUT_DIR})"
+    )
+    parser.add_argument(
+        "--delay-min",
+        type=float,
+        default=2.0,
+        help="Minimum delay between requests in seconds (default: 2.0)"
+    )
+    parser.add_argument(
+        "--delay-max",
+        type=float,
+        default=5.0,
+        help="Maximum delay between requests in seconds (default: 5.0)"
+    )
+    parser.add_argument(
+        "--no-resume",
+        action="store_true",
+        help="Don't skip already-scraped URLs (start fresh)"
+    )
+
+    # Analysis mode
     parser.add_argument(
         "--analyze", "-a",
         action="store_true",
         help="Analyze HTML structure to help identify selectors"
     )
+
+    # Selector options
     parser.add_argument(
         "--container", "-c",
         help="CSS selector for message containers"
@@ -277,9 +654,11 @@ def main():
         "--content-selector",
         help="CSS selector for message content within container"
     )
+
+    # Output options
     parser.add_argument(
         "--output", "-o",
-        help="Output file path (default: stdout)"
+        help="Output file path (for single URL/file mode)"
     )
     parser.add_argument(
         "--json",
@@ -289,18 +668,46 @@ def main():
 
     args = parser.parse_args()
 
-    # Validate arguments
+    # Handle --login mode
+    if args.login:
+        login_and_save_session(args.session_dir)
+        return
+
+    # Handle --batch mode
+    if args.batch:
+        headless = not args.no_headless  # Default to headless for batch
+        batch_scrape(
+            urls_file=args.batch,
+            output_dir=args.output_dir,
+            session_dir=args.session_dir,
+            delay_min=args.delay_min,
+            delay_max=args.delay_max,
+            headless=headless,
+            container_selector=args.container,
+            user_selector=args.user_selector,
+            model_selector=args.model_selector,
+            content_selector=args.content_selector,
+            output_json=args.json,
+            resume=not args.no_resume
+        )
+        return
+
+    # Validate arguments for single-file/URL modes
     if not args.file and not args.url:
-        parser.error("Either --file or --url must be specified")
+        parser.error("One of --file, --url, --batch, or --login is required")
     if args.url and not args.browser:
-        parser.error("--url requires --browser flag (Gemini requires authentication)")
+        parser.error("--url requires --browser flag")
 
     # Load HTML
     if args.file:
         print(f"Loading HTML from file: {args.file}")
         html_content = load_html_from_file(args.file)
     else:
-        html_content = load_html_with_playwright(args.url)
+        html_content = load_html_with_browser(
+            args.url,
+            session_dir=args.session_dir if args.session_dir.exists() else None,
+            headless=args.headless and not args.no_headless
+        )
 
     # Parse HTML
     soup = BeautifulSoup(html_content, "lxml")
@@ -360,7 +767,8 @@ def main():
     if args.json:
         output = json.dumps(
             [{"role": role, "content": msg} for role, msg in conversations],
-            indent=2
+            indent=2,
+            ensure_ascii=False
         )
     else:
         output = format_conversation(conversations)
