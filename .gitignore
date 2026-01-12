@@ -4,6 +4,9 @@ __pycache__/
 .env
 debug_gemini_page.html
 
+# macOS
+.DS_Store
+
 # URL files
 url.txt
 urls.txt
