@@ -17,6 +17,7 @@ Usage:
 
 import argparse
 import json
+import os
 import random
 import re
 import sys
@@ -32,6 +33,38 @@ SESSION_DIR = Path.home() / ".gemini_scraper_session"
 DEFAULT_OUTPUT_DIR = Path("./gemini_conversations")
 
 
+def find_chrome_user_data_dir() -> Optional[Path]:
+    """Find the default Chrome/Chromium user data directory."""
+    import platform
+    system = platform.system()
+
+    possible_paths = []
+
+    if system == "Darwin":  # macOS
+        possible_paths = [
+            Path.home() / "Library/Application Support/Google/Chrome",
+            Path.home() / "Library/Application Support/Chromium",
+        ]
+    elif system == "Linux":
+        possible_paths = [
+            Path.home() / ".config/google-chrome",
+            Path.home() / ".config/chromium",
+            Path.home() / "snap/chromium/common/chromium",
+        ]
+    elif system == "Windows":
+        local_app_data = Path(os.environ.get("LOCALAPPDATA", ""))
+        possible_paths = [
+            local_app_data / "Google/Chrome/User Data",
+            local_app_data / "Chromium/User Data",
+        ]
+
+    for path in possible_paths:
+        if path.exists():
+            return path
+
+    return None
+
+
 def get_playwright():
     """Import and return playwright, with helpful error message."""
     try:
@@ -44,9 +77,13 @@ def get_playwright():
         sys.exit(1)
 
 
-def login_and_save_session(session_dir: Path = SESSION_DIR) -> None:
+def login_and_save_session(session_dir: Path = SESSION_DIR, use_chrome: bool = False) -> None:
     """
     Open browser for manual Google login and save the session for reuse.
+
+    Args:
+        session_dir: Directory to save session data
+        use_chrome: If True, use existing Chrome profile to avoid login issues
     """
     sync_playwright = get_playwright()
 
@@ -56,37 +93,90 @@ def login_and_save_session(session_dir: Path = SESSION_DIR) -> None:
     print("GEMINI SESSION LOGIN")
     print("=" * 60)
     print()
-    print("A browser window will open. Please:")
-    print("1. Log in to your Google account")
-    print("2. Navigate to any Gemini shared conversation")
-    print("3. Make sure you can see the conversation content")
-    print("4. Press Enter in this terminal when done")
-    print()
-    print(f"Session will be saved to: {session_dir}")
-    print()
 
-    with sync_playwright() as p:
-        # Use persistent context to save session data
-        context = p.chromium.launch_persistent_context(
-            str(session_dir),
-            headless=False,
-            viewport={"width": 1280, "height": 800}
-        )
+    if use_chrome:
+        chrome_dir = find_chrome_user_data_dir()
+        if not chrome_dir:
+            print("ERROR: Could not find Chrome/Chromium installation.")
+            print("Please specify your Chrome profile path manually or use --login without --use-chrome")
+            sys.exit(1)
 
-        page = context.new_page()
-        page.goto("https://gemini.google.com/")
-
-        print("Waiting for you to log in...")
-        print("Press Enter when you're logged in and can see conversations...")
+        print("Using your existing Chrome profile to avoid Google login issues.")
+        print(f"Chrome profile: {chrome_dir}")
+        print()
+        print("IMPORTANT: Please close all Chrome windows before continuing!")
+        print("Press Enter when Chrome is fully closed...")
         input()
 
-        # Verify login by checking for user-specific elements
-        print("Verifying session...")
-        context.close()
+        with sync_playwright() as p:
+            # Launch Chrome with existing profile
+            context = p.chromium.launch_persistent_context(
+                str(chrome_dir),
+                headless=False,
+                viewport={"width": 1280, "height": 800},
+                channel="chrome",  # Use installed Chrome
+            )
 
-    print()
-    print("Session saved successfully!")
-    print(f"Session location: {session_dir}")
+            page = context.new_page()
+            page.goto("https://gemini.google.com/share/test")
+
+            print()
+            print("Browser opened. You should already be logged in!")
+            print("If you can see the Gemini page (even if 'conversation not found'),")
+            print("your session is working.")
+            print()
+            print("Press Enter to save session and continue...")
+            input()
+
+            # Copy cookies to our session directory
+            cookies = context.cookies()
+            context.close()
+
+        # Save cookies to session dir
+        cookies_file = session_dir / "cookies.json"
+        with open(cookies_file, 'w') as f:
+            json.dump(cookies, f)
+
+        print()
+        print("Session saved successfully!")
+        print(f"Cookies saved to: {cookies_file}")
+
+    else:
+        print("A browser window will open. Please:")
+        print("1. Log in to your Google account")
+        print("2. Navigate to any Gemini shared conversation")
+        print("3. Make sure you can see the conversation content")
+        print("4. Press Enter in this terminal when done")
+        print()
+        print("NOTE: If you see 'This browser may not be secure', use:")
+        print("  python gemini_scraper.py --login --use-chrome")
+        print()
+        print(f"Session will be saved to: {session_dir}")
+        print()
+
+        with sync_playwright() as p:
+            # Use persistent context to save session data
+            context = p.chromium.launch_persistent_context(
+                str(session_dir),
+                headless=False,
+                viewport={"width": 1280, "height": 800}
+            )
+
+            page = context.new_page()
+            page.goto("https://gemini.google.com/")
+
+            print("Waiting for you to log in...")
+            print("Press Enter when you're logged in and can see conversations...")
+            input()
+
+            # Verify login by checking for user-specific elements
+            print("Verifying session...")
+            context.close()
+
+        print()
+        print("Session saved successfully!")
+        print(f"Session location: {session_dir}")
+
     print()
     print("You can now run batch scraping with:")
     print(f"  python gemini_scraper.py --batch urls.txt --output-dir ./conversations")
@@ -221,10 +311,14 @@ def batch_scrape(
     output_path.mkdir(parents=True, exist_ok=True)
 
     # Check session
-    if not session_dir.exists():
+    cookies_file = session_dir / "cookies.json"
+    has_cookies = cookies_file.exists()
+    has_session = session_dir.exists() and any(session_dir.iterdir())
+
+    if not has_cookies and not has_session:
         print(f"No saved session found at: {session_dir}")
         print("Run with --login first to authenticate:")
-        print("  python gemini_scraper.py --login")
+        print("  python gemini_scraper.py --login --use-chrome")
         sys.exit(1)
 
     # Load URLs
@@ -259,12 +353,24 @@ def batch_scrape(
     sync_playwright = get_playwright()
 
     with sync_playwright() as p:
-        # Open persistent context once for all URLs
-        context = p.chromium.launch_persistent_context(
-            str(session_dir),
-            headless=headless,
-            viewport={"width": 1280, "height": 800}
-        )
+        # Open browser context
+        if has_cookies:
+            # Use fresh browser with saved cookies
+            browser = p.chromium.launch(headless=headless)
+            context = browser.new_context(viewport={"width": 1280, "height": 800})
+
+            # Load cookies
+            with open(cookies_file, 'r') as f:
+                cookies = json.load(f)
+            context.add_cookies(cookies)
+            print(f"Loaded {len(cookies)} cookies from saved session")
+        else:
+            # Use persistent context
+            context = p.chromium.launch_persistent_context(
+                str(session_dir),
+                headless=headless,
+                viewport={"width": 1280, "height": 800}
+            )
 
         page = context.new_page()
 
@@ -545,7 +651,8 @@ def main():
         epilog="""
 Examples:
   # Step 1: Login and save session (do this once)
-  python gemini_scraper.py --login
+  # Use --use-chrome to avoid "browser not secure" error
+  python gemini_scraper.py --login --use-chrome
 
   # Step 2: Create a file with URLs to scrape (one per line)
   # urls.txt:
@@ -588,6 +695,11 @@ Examples:
         "--browser", "-b",
         action="store_true",
         help="Use Playwright browser (required for --url)"
+    )
+    parser.add_argument(
+        "--use-chrome",
+        action="store_true",
+        help="Use existing Chrome profile for login (avoids 'browser not secure' error)"
     )
     parser.add_argument(
         "--session-dir",
@@ -670,7 +782,7 @@ Examples:
 
     # Handle --login mode
     if args.login:
-        login_and_save_session(args.session_dir)
+        login_and_save_session(args.session_dir, use_chrome=args.use_chrome)
         return
 
     # Handle --batch mode
