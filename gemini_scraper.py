@@ -1,18 +1,20 @@
 #!/usr/bin/env python3
 """
-Gemini Conversation Scraper
+LLM Conversation Scraper
 
-Scrapes exported Gemini conversations and formats them as:
+Scrapes conversations from Gemini, ChatGPT, Claude, and other AI platforms.
+Formats them as:
 User: <message>
 Model: <message>
 ...
 
 Usage:
-    1. Local HTML file: python gemini_scraper.py --file conversation.html
-    2. Single URL with browser: python gemini_scraper.py --url <url> --browser
-    3. Login and save session: python gemini_scraper.py --login
-    4. Batch scrape with saved session: python gemini_scraper.py --batch urls.txt --output-dir ./conversations
-    5. Analyze mode: python gemini_scraper.py --file conversation.html --analyze
+    1. List templates: python gemini_scraper.py --list-templates
+    2. Local HTML file: python gemini_scraper.py --file conversation.html --template gemini
+    3. Single URL with browser: python gemini_scraper.py --url <url> --browser --template chatgpt
+    4. Login and save session: python gemini_scraper.py --login
+    5. Batch scrape: python gemini_scraper.py --batch urls.txt --template gemini --output-dir ./conversations
+    6. Analyze mode: python gemini_scraper.py --file conversation.html --analyze
 """
 
 import argparse
@@ -26,6 +28,40 @@ from pathlib import Path
 from typing import Optional
 
 from bs4 import BeautifulSoup
+
+
+# Conversation extraction templates for different platforms
+TEMPLATES = {
+    "gemini": {
+        "name": "Gemini Shared Conversations",
+        "structure": "turn-based",  # Each container has both user and model
+        "container": ".share-turn-viewer",
+        "user_selector": "user-query",
+        "model_selector": "response-container",
+        "description": "For Gemini shared conversation pages (gemini.google.com/share/...)"
+    },
+    "chatgpt": {
+        "name": "ChatGPT Conversations",
+        "structure": "attribute-based",  # Role determined by attribute
+        "container": "article",
+        "role_attribute": "data-turn",
+        "role_mapping": {
+            "user": "User",
+            "assistant": "Model",
+        },
+        "description": "For ChatGPT conversation exports"
+    },
+    "claude": {
+        "name": "Claude Conversations",
+        "structure": "class-based",
+        "container": ".font-claude-response, .font-user-message",
+        "role_classes": {
+            "user": ["font-user-message", "user-message"],
+            "model": ["font-claude-response", "claude-response", "assistant-message"],
+        },
+        "description": "For Claude conversation exports"
+    },
+}
 
 
 # Default paths
@@ -284,18 +320,21 @@ def scrape_single_url(
     url: str,
     session_dir: Optional[Path] = None,
     headless: bool = True,
+    template: Optional[str] = None,
     container_selector: Optional[str] = None,
     user_selector: Optional[str] = None,
     model_selector: Optional[str] = None,
     content_selector: Optional[str] = None
 ) -> list[tuple[str, str]]:
     """
-    Scrape a single Gemini URL and return conversations.
+    Scrape a single URL and return conversations.
     """
     html_content = load_html_with_browser(url, session_dir, headless)
     soup = BeautifulSoup(html_content, "lxml")
 
-    if container_selector:
+    if template:
+        return extract_with_template(soup, template)
+    elif container_selector:
         return extract_with_selectors(
             soup, container_selector, user_selector, model_selector, content_selector
         )
@@ -310,6 +349,7 @@ def batch_scrape(
     delay_min: float = 2.0,
     delay_max: float = 5.0,
     headless: bool = True,
+    template: Optional[str] = None,
     container_selector: Optional[str] = None,
     user_selector: Optional[str] = None,
     model_selector: Optional[str] = None,
@@ -447,7 +487,9 @@ def batch_scrape(
                         continue
 
                     # Extract conversations
-                    if container_selector:
+                    if template:
+                        conversations = extract_with_template(soup, template)
+                    elif container_selector:
                         conversations = extract_with_selectors(
                             soup, container_selector, user_selector,
                             model_selector, content_selector
@@ -685,6 +727,85 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     return conversations
 
 
+def extract_with_template(soup: BeautifulSoup, template_name: str) -> list[tuple[str, str]]:
+    """
+    Extract conversations using a predefined template.
+
+    Args:
+        soup: BeautifulSoup object of the HTML
+        template_name: Name of the template to use (from TEMPLATES dict)
+
+    Returns:
+        List of (role, message) tuples
+    """
+    if template_name not in TEMPLATES:
+        raise ValueError(f"Unknown template: {template_name}. Available: {', '.join(TEMPLATES.keys())}")
+
+    template = TEMPLATES[template_name]
+    structure = template.get("structure")
+
+    if structure == "turn-based":
+        # Each container has both user and model messages
+        return extract_with_selectors(
+            soup,
+            template["container"],
+            template.get("user_selector"),
+            template.get("model_selector"),
+            template.get("content_selector")
+        )
+
+    elif structure == "attribute-based":
+        # Role is determined by an attribute value
+        conversations = []
+        containers = soup.select(template["container"])
+        role_attr = template["role_attribute"]
+        role_mapping = template.get("role_mapping", {})
+
+        for container in containers:
+            attr_value = container.get(role_attr, "").lower()
+            text = container.get_text(separator="\n", strip=True)
+
+            if not text or len(text) < 5:
+                continue
+
+            # Map attribute value to role
+            role = role_mapping.get(attr_value, "Model")
+            conversations.append((role, text))
+
+        return conversations
+
+    elif structure == "class-based":
+        # Role is determined by CSS classes
+        conversations = []
+        containers = soup.select(template["container"])
+        role_classes = template.get("role_classes", {})
+
+        for container in containers:
+            classes = container.get("class", [])
+            class_str = " ".join(classes).lower()
+            text = container.get_text(separator="\n", strip=True)
+
+            if not text or len(text) < 5:
+                continue
+
+            # Determine role from classes
+            role = "Model"  # Default
+            for cls in classes:
+                if any(user_cls.lower() in cls.lower() for user_cls in role_classes.get("user", [])):
+                    role = "User"
+                    break
+                elif any(model_cls.lower() in cls.lower() for model_cls in role_classes.get("model", [])):
+                    role = "Model"
+                    break
+
+            conversations.append((role, text))
+
+        return conversations
+
+    else:
+        raise ValueError(f"Unknown structure type: {structure}")
+
+
 def extract_with_selectors(
     soup: BeautifulSoup,
     container_selector: str,
@@ -798,26 +919,35 @@ def format_conversation(conversations: list[tuple[str, str]]) -> str:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Scrape Gemini conversations and format as User/Model dialogue",
+        description="Scrape AI conversations from Gemini, ChatGPT, Claude, and format as User/Model dialogue",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Examples:
+  # List available templates
+  python gemini_scraper.py --list-templates
+
   # Step 1: Login and save session (do this once)
-  # Use --use-chrome to avoid "browser not secure" error
   python gemini_scraper.py --login --use-chrome
 
   # Step 2: Create a file with URLs to scrape (one per line)
   # urls.txt:
   # https://gemini.google.com/share/abc123
-  # https://gemini.google.com/share/def456
+  # https://chatgpt.com/share/def456
 
-  # Step 3: Batch scrape all URLs
-  python gemini_scraper.py --batch urls.txt --output-dir ./conversations
+  # Step 3: Batch scrape with a template
+  python gemini_scraper.py --batch urls.txt --template gemini --output-dir ./conversations
+  python gemini_scraper.py --batch urls.txt --template chatgpt --output-dir ./conversations
 
-  # Other options:
-  python gemini_scraper.py --file saved.html          # Parse local HTML
-  python gemini_scraper.py --url <url> --browser      # Single URL with browser
-  python gemini_scraper.py --file saved.html --analyze # Analyze HTML structure
+  # Using custom selectors (instead of template)
+  python gemini_scraper.py --batch urls.txt \\
+    --container ".share-turn-viewer" \\
+    --user-selector "user-query" \\
+    --model-selector "response-container" \\
+    --output-dir ./conversations
+
+  # Single file parsing
+  python gemini_scraper.py --file saved.html --template gemini
+  python gemini_scraper.py --file saved.html --analyze  # Analyze HTML structure
         """
     )
 
@@ -901,10 +1031,22 @@ Examples:
         help="Analyze HTML structure to help identify selectors"
     )
 
-    # Selector options
+    # Template options
+    parser.add_argument(
+        "--template", "-t",
+        choices=list(TEMPLATES.keys()),
+        help=f"Use a predefined template (choices: {', '.join(TEMPLATES.keys())})"
+    )
+    parser.add_argument(
+        "--list-templates",
+        action="store_true",
+        help="List all available templates and exit"
+    )
+
+    # Selector options (for custom extraction)
     parser.add_argument(
         "--container", "-c",
-        help="CSS selector for message containers"
+        help="CSS selector for message containers (custom extraction)"
     )
     parser.add_argument(
         "--user-selector",
@@ -932,6 +1074,17 @@ Examples:
 
     args = parser.parse_args()
 
+    # Handle --list-templates mode
+    if args.list_templates:
+        print("Available templates:\n")
+        for name, info in TEMPLATES.items():
+            print(f"  {name}:")
+            print(f"    Name: {info['name']}")
+            print(f"    Structure: {info['structure']}")
+            print(f"    Description: {info['description']}")
+            print()
+        return
+
     # Handle --login mode
     if args.login:
         login_and_save_session(args.session_dir, use_chrome=args.use_chrome)
@@ -947,6 +1100,7 @@ Examples:
             delay_min=args.delay_min,
             delay_max=args.delay_max,
             headless=headless,
+            template=args.template,
             container_selector=args.container,
             user_selector=args.user_selector,
             model_selector=args.model_selector,
@@ -1006,7 +1160,10 @@ Examples:
         return
 
     # Extract conversations
-    if args.container:
+    if args.template:
+        print(f"Extracting with template: {args.template}")
+        conversations = extract_with_template(soup, args.template)
+    elif args.container:
         print("Extracting with custom selectors...")
         conversations = extract_with_selectors(
             soup,
