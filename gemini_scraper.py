@@ -59,7 +59,7 @@ TEMPLATES = {
             "user": ["font-user-message", "user-message"],
             "model": ["font-claude-response", "claude-response", "assistant-message"],
         },
-        "description": "For Claude conversation exports"
+        "description": "For Claude conversation exports (Note: claude.ai uses Cloudflare protection - manual HTML download required)"
     },
 }
 
@@ -486,6 +486,17 @@ def batch_scrape(
                         })
                         continue
 
+                    # Check for Cloudflare challenge
+                    page_title = soup.find("title")
+                    if page_title and "just a moment" in page_title.get_text().lower():
+                        print("ERROR: Hit Cloudflare challenge page")
+                        stats["failed"] += 1
+                        stats["errors"].append({
+                            "url": url,
+                            "error": "Cloudflare challenge detected - this site blocks automated scraping. Download HTML manually."
+                        })
+                        continue
+
                     # Extract conversations
                     if template:
                         conversations = extract_with_template(soup, template)
@@ -587,6 +598,22 @@ def batch_scrape(
             print("  python gemini_scraper.py --login --use-chrome")
             print()
             print("Then try batch scraping again.")
+
+        # Check for Cloudflare challenge errors
+        cloudflare_errors = [e for e in stats["errors"] if "cloudflare" in e["error"].lower()]
+        if cloudflare_errors:
+            print()
+            print("=" * 60)
+            print("CLOUDFLARE PROTECTION DETECTED")
+            print("=" * 60)
+            print("Some URLs are protected by Cloudflare anti-bot measures.")
+            print("Automated scraping is not possible for these sites.")
+            print()
+            print("Workaround:")
+            print("1. Manually open the URL in your browser")
+            print("2. Complete the Cloudflare challenge")
+            print("3. Save the page as HTML (Ctrl+S / Cmd+S)")
+            print("4. Use: python gemini_scraper.py --file saved.html --template <platform>")
 
     # Save stats
     stats_file = output_path / "scraping_stats.json"
@@ -926,7 +953,8 @@ Examples:
   # List available templates
   python gemini_scraper.py --list-templates
 
-  # Step 1: Login and save session (do this once)
+  # Automated URL scraping (requires authentication for Gemini)
+  # Step 1: Login and save session (do this once for Gemini)
   python gemini_scraper.py --login --use-chrome
 
   # Step 2: Create a file with URLs to scrape (one per line)
@@ -938,6 +966,12 @@ Examples:
   python gemini_scraper.py --batch urls.txt --template gemini --output-dir ./conversations
   python gemini_scraper.py --batch urls.txt --template chatgpt --output-dir ./conversations
 
+  # Manual HTML parsing (for sites with Cloudflare protection like Claude)
+  # 1. Open the URL in browser and complete any challenges
+  # 2. Save page as HTML (Ctrl+S / Cmd+S)
+  # 3. Parse the saved file
+  python gemini_scraper.py --file conversation.html --template claude
+
   # Using custom selectors (instead of template)
   python gemini_scraper.py --batch urls.txt \\
     --container ".share-turn-viewer" \\
@@ -945,9 +979,8 @@ Examples:
     --model-selector "response-container" \\
     --output-dir ./conversations
 
-  # Single file parsing
-  python gemini_scraper.py --file saved.html --template gemini
-  python gemini_scraper.py --file saved.html --analyze  # Analyze HTML structure
+  # Analyze HTML structure to create custom templates
+  python gemini_scraper.py --file saved.html --analyze
         """
     )
 
