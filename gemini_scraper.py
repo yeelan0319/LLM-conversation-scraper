@@ -53,13 +53,15 @@ TEMPLATES = {
     },
     "claude": {
         "name": "Claude Conversations",
-        "structure": "class-based",
-        "container": ".font-claude-response, .font-user-message",
-        "role_classes": {
-            "user": ["font-user-message", "user-message"],
-            "model": ["font-claude-response", "claude-response", "assistant-message"],
+        "structure": "attribute-based",
+        "container": "[data-testid*='message']",
+        "role_attribute": "data-testid",
+        "role_mapping": {
+            "user-message": "User",
+            "model-message": "Model",
+            "assistant-message": "Model",
         },
-        "description": "For Claude conversation exports"
+        "description": "For Claude conversation pages (claude.ai)"
     },
 }
 
