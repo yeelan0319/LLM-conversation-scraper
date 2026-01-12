@@ -17,7 +17,7 @@ Model: something model said
 pip install -r requirements.txt
 
 # Install browser for Playwright
-playwright install chromium
+python -m playwright install chromium
 ```
 
 ## Quick Start: Batch Scraping (Recommended for Many URLs)
