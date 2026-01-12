@@ -435,6 +435,17 @@ def batch_scrape(
                     html_content = page.content()
                     soup = BeautifulSoup(html_content, "lxml")
 
+                    # Check if we hit a consent/login page
+                    if "consent.google.com" in page.url or "accounts.google.com" in page.url:
+                        print("ERROR: Hit consent/login page")
+                        print(f"  Current URL: {page.url}")
+                        stats["failed"] += 1
+                        stats["errors"].append({
+                            "url": url,
+                            "error": "Redirected to consent/login page - authentication may have expired"
+                        })
+                        continue
+
                     # Extract conversations
                     if container_selector:
                         conversations = extract_with_selectors(
@@ -445,13 +456,29 @@ def batch_scrape(
                         conversations = extract_conversations_auto(soup)
 
                     if not conversations:
-                        print("No messages found!")
+                        # Check if it's a consent page
+                        page_title = soup.find("title")
+                        page_text = soup.get_text().lower()
+                        is_consent_page = (
+                            "consent" in page_text[:5000] or
+                            "cookie" in page_text[:5000] or
+                            (page_title and "consent" in page_title.get_text().lower())
+                        )
+
+                        if is_consent_page:
+                            print("ERROR: Got consent page instead of content")
+                            error_msg = "Got consent/cookie page - session may be invalid or expired"
+                        else:
+                            print("No messages found!")
+                            error_msg = "No messages found"
+
                         stats["failed"] += 1
-                        stats["errors"].append({"url": url, "error": "No messages found"})
+                        stats["errors"].append({"url": url, "error": error_msg})
 
                         # Save debug HTML
                         debug_file = output_path / f"{url_id}_debug.html"
                         debug_file.write_text(html_content, encoding="utf-8")
+                        print(f"  Debug HTML saved to: {debug_file}")
                         continue
 
                     # Format and save output
@@ -504,6 +531,20 @@ def batch_scrape(
             print(f"  {err['url']}: {err['error']}")
         if len(stats["errors"]) > 10:
             print(f"  ... and {len(stats['errors']) - 10} more")
+
+        # Check if consent/authentication errors occurred
+        consent_errors = [e for e in stats["errors"] if "consent" in e["error"].lower() or "login" in e["error"].lower()]
+        if consent_errors:
+            print()
+            print("=" * 60)
+            print("AUTHENTICATION ISSUE DETECTED")
+            print("=" * 60)
+            print("Your session cookies may be invalid or expired.")
+            print("Please re-authenticate by running:")
+            print()
+            print("  python gemini_scraper.py --login --use-chrome")
+            print()
+            print("Then try batch scraping again.")
 
     # Save stats
     stats_file = output_path / "scraping_stats.json"

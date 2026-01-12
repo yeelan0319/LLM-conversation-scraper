@@ -1,0 +1,5 @@
+# Gemini Conversation URLs
+# Add your Gemini share URLs here, one per line
+# Example: https://gemini.google.com/share/9184c7fceea1
+
+# Lines starting with # are comments and will be ignored
