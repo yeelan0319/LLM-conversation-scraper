@@ -178,10 +178,28 @@ def login_and_save_session(session_dir: Path = SESSION_DIR, use_chrome: bool = F
                 # Get the default context (the user's actual browser session)
                 context = browser.contexts[0]
 
+                # Get a page to extract browser context
+                if context.pages:
+                    page = context.pages[0]
+                else:
+                    page = context.new_page()
+
                 # Extract cookies
                 cookies = context.cookies()
 
+                # Extract user agent and other browser fingerprint info
+                user_agent = page.evaluate("navigator.userAgent")
+                viewport = page.viewport_size
+
+                browser_context = {
+                    "user_agent": user_agent,
+                    "viewport": viewport,
+                    "platform": page.evaluate("navigator.platform"),
+                    "languages": page.evaluate("navigator.languages"),
+                }
+
                 print(f"Found {len(cookies)} cookies")
+                print(f"User agent: {user_agent}")
 
                 # Don't close - user's browser
                 browser.close()
@@ -195,14 +213,19 @@ def login_and_save_session(session_dir: Path = SESSION_DIR, use_chrome: bool = F
             print("3. The port 9222 is not blocked")
             sys.exit(1)
 
-        # Save cookies to session dir
+        # Save cookies and browser context to session dir
         cookies_file = session_dir / "cookies.json"
         with open(cookies_file, 'w') as f:
             json.dump(cookies, f)
 
+        context_file = session_dir / "browser_context.json"
+        with open(context_file, 'w') as f:
+            json.dump(browser_context, f)
+
         print()
         print("Session saved successfully!")
         print(f"Cookies saved to: {cookies_file}")
+        print(f"Browser context saved to: {context_file}")
         print()
         print("You can now close Chrome and run batch scraping:")
         print(f"  python gemini_scraper.py --batch urls.txt --output-dir ./conversations")
@@ -424,9 +447,54 @@ def batch_scrape(
     with sync_playwright() as p:
         # Open browser context
         if has_cookies:
-            # Use fresh browser with saved cookies
-            browser = p.chromium.launch(headless=headless)
-            context = browser.new_context(viewport={"width": 1280, "height": 800})
+            # Load browser context if available
+            context_file = session_dir / "browser_context.json"
+            browser_context = {}
+            if context_file.exists():
+                with open(context_file, 'r') as f:
+                    browser_context = json.load(f)
+                print(f"Loaded browser context (user agent, viewport, etc.)")
+
+            # Prepare context options
+            context_options = {
+                "viewport": browser_context.get("viewport", {"width": 1280, "height": 800}),
+            }
+
+            # Add user agent if available
+            if browser_context.get("user_agent"):
+                context_options["user_agent"] = browser_context["user_agent"]
+
+            # Add locale/language if available
+            if browser_context.get("languages"):
+                # Use the first language as locale
+                context_options["locale"] = browser_context["languages"][0] if browser_context["languages"] else None
+
+            # Use fresh browser with saved cookies and context
+            browser = p.chromium.launch(
+                headless=headless,
+                args=[
+                    '--disable-blink-features=AutomationControlled',  # Hide automation
+                ]
+            )
+            context = browser.new_context(**context_options)
+
+            # Set additional properties to avoid detection
+            context.add_init_script("""
+                // Remove webdriver property
+                Object.defineProperty(navigator, 'webdriver', {
+                    get: () => undefined
+                });
+
+                // Fix navigator.plugins
+                Object.defineProperty(navigator, 'plugins', {
+                    get: () => [1, 2, 3, 4, 5]
+                });
+
+                // Fix navigator.languages
+                Object.defineProperty(navigator, 'languages', {
+                    get: () => ['en-US', 'en']
+                });
+            """)
 
             # Load cookies
             with open(cookies_file, 'r') as f:
