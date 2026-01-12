@@ -1,0 +1,5 @@
+__pycache__/
+*.pyc
+*.pyo
+.env
+debug_gemini_page.html
