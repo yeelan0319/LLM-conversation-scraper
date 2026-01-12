@@ -705,27 +705,44 @@ def extract_with_selectors(
     containers = soup.select(container_selector)
 
     for container in containers:
-        # Determine role
-        role = "Model"  # Default
-        if user_selector and container.select_one(user_selector):
-            role = "User"
-        elif model_selector and container.select_one(model_selector):
-            role = "Model"
+        # Check if container has both user and model content (turn-based structure)
+        user_elem = container.select_one(user_selector) if user_selector else None
+        model_elem = container.select_one(model_selector) if model_selector else None
+
+        if user_elem and model_elem:
+            # This container has both user and model - extract them separately
+            # Extract user message
+            user_text = user_elem.get_text(separator="\n", strip=True)
+            if user_text and len(user_text) > 5:
+                conversations.append(("User", user_text))
+
+            # Extract model message
+            model_text = model_elem.get_text(separator="\n", strip=True)
+            if model_text and len(model_text) > 5:
+                conversations.append(("Model", model_text))
+
         else:
-            # Check class names
-            classes = " ".join(container.get("class", [])).lower()
-            if "user" in classes or "query" in classes or "human" in classes:
+            # Single role container - use original logic
+            role = "Model"  # Default
+            if user_elem:
                 role = "User"
+            elif model_elem:
+                role = "Model"
+            else:
+                # Check class names
+                classes = " ".join(container.get("class", [])).lower()
+                if "user" in classes or "query" in classes or "human" in classes:
+                    role = "User"
 
-        # Extract content
-        if content_selector:
-            content_elem = container.select_one(content_selector)
-            text = content_elem.get_text(separator="\n", strip=True) if content_elem else ""
-        else:
-            text = container.get_text(separator="\n", strip=True)
+            # Extract content
+            if content_selector:
+                content_elem = container.select_one(content_selector)
+                text = content_elem.get_text(separator="\n", strip=True) if content_elem else ""
+            else:
+                text = container.get_text(separator="\n", strip=True)
 
-        if text and len(text) > 5:
-            conversations.append((role, text))
+            if text and len(text) > 5:
+                conversations.append((role, text))
 
     return conversations
 
