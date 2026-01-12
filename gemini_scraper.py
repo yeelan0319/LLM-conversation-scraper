@@ -83,7 +83,7 @@ def login_and_save_session(session_dir: Path = SESSION_DIR, use_chrome: bool = F
 
     Args:
         session_dir: Directory to save session data
-        use_chrome: If True, use existing Chrome profile to avoid login issues
+        use_chrome: If True, connect to existing Chrome via remote debugging
     """
     sync_playwright = get_playwright()
 
@@ -95,42 +95,69 @@ def login_and_save_session(session_dir: Path = SESSION_DIR, use_chrome: bool = F
     print()
 
     if use_chrome:
-        chrome_dir = find_chrome_user_data_dir()
-        if not chrome_dir:
-            print("ERROR: Could not find Chrome/Chromium installation.")
-            print("Please specify your Chrome profile path manually or use --login without --use-chrome")
-            sys.exit(1)
-
-        print("Using your existing Chrome profile to avoid Google login issues.")
-        print(f"Chrome profile: {chrome_dir}")
+        # Connect to existing Chrome instance via CDP
+        print("This method connects to your regular Chrome browser")
+        print("(not controlled by automation) to extract cookies.")
         print()
-        print("IMPORTANT: Please close all Chrome windows before continuing!")
-        print("Press Enter when Chrome is fully closed...")
-        input()
+        print("=" * 60)
+        print("STEP 1: Start Chrome with remote debugging")
+        print("=" * 60)
+        print()
+        print("Close ALL Chrome windows, then run this command:")
+        print()
 
-        with sync_playwright() as p:
-            # Launch Chrome with existing profile
-            context = p.chromium.launch_persistent_context(
-                str(chrome_dir),
-                headless=False,
-                viewport={"width": 1280, "height": 800},
-                channel="chrome",  # Use installed Chrome
-            )
+        import platform
+        system = platform.system()
+        if system == "Darwin":
+            print('  /Applications/Google\\ Chrome.app/Contents/MacOS/Google\\ Chrome --remote-debugging-port=9222')
+        elif system == "Windows":
+            print('  "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe" --remote-debugging-port=9222')
+        else:
+            print('  google-chrome --remote-debugging-port=9222')
+            print('  # or: chromium-browser --remote-debugging-port=9222')
 
-            page = context.new_page()
-            page.goto("https://gemini.google.com/share/test")
+        print()
+        print("=" * 60)
+        print("STEP 2: Log in to Google in that browser")
+        print("=" * 60)
+        print()
+        print("1. In the Chrome window that opens, go to: https://gemini.google.com/")
+        print("2. Log in to your Google account if needed")
+        print("3. Open any shared conversation to verify access")
+        print()
+        print("=" * 60)
+        print("STEP 3: Press Enter here when ready")
+        print("=" * 60)
+        print()
+        input("Press Enter after completing the steps above...")
 
+        print()
+        print("Connecting to Chrome...")
+
+        try:
+            with sync_playwright() as p:
+                # Connect to existing browser via CDP
+                browser = p.chromium.connect_over_cdp("http://localhost:9222")
+
+                # Get the default context (the user's actual browser session)
+                context = browser.contexts[0]
+
+                # Extract cookies
+                cookies = context.cookies()
+
+                print(f"Found {len(cookies)} cookies")
+
+                # Don't close - user's browser
+                browser.close()
+
+        except Exception as e:
+            print(f"ERROR: Could not connect to Chrome: {e}")
             print()
-            print("Browser opened. You should already be logged in!")
-            print("If you can see the Gemini page (even if 'conversation not found'),")
-            print("your session is working.")
-            print()
-            print("Press Enter to save session and continue...")
-            input()
-
-            # Copy cookies to our session directory
-            cookies = context.cookies()
-            context.close()
+            print("Make sure:")
+            print("1. Chrome is running with --remote-debugging-port=9222")
+            print("2. No other Chrome instances were running before")
+            print("3. The port 9222 is not blocked")
+            sys.exit(1)
 
         # Save cookies to session dir
         cookies_file = session_dir / "cookies.json"
@@ -140,6 +167,9 @@ def login_and_save_session(session_dir: Path = SESSION_DIR, use_chrome: bool = F
         print()
         print("Session saved successfully!")
         print(f"Cookies saved to: {cookies_file}")
+        print()
+        print("You can now close Chrome and run batch scraping:")
+        print(f"  python gemini_scraper.py --batch urls.txt --output-dir ./conversations")
 
     else:
         print("A browser window will open. Please:")
@@ -176,10 +206,9 @@ def login_and_save_session(session_dir: Path = SESSION_DIR, use_chrome: bool = F
         print()
         print("Session saved successfully!")
         print(f"Session location: {session_dir}")
-
-    print()
-    print("You can now run batch scraping with:")
-    print(f"  python gemini_scraper.py --batch urls.txt --output-dir ./conversations")
+        print()
+        print("You can now run batch scraping with:")
+        print(f"  python gemini_scraper.py --batch urls.txt --output-dir ./conversations")
 
 
 def load_html_from_file(file_path: str) -> str:

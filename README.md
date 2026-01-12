@@ -26,23 +26,32 @@ For scraping thousands of conversations automatically:
 
 ### Step 1: Login Once
 
+To avoid Google's "browser not secure" block, use `--use-chrome` which connects to your regular Chrome:
+
+**Step 1a:** Close all Chrome windows, then start Chrome with remote debugging:
+
+```bash
+# macOS
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+
+# Linux
+google-chrome --remote-debugging-port=9222
+
+# Windows
+"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+```
+
+**Step 1b:** In that Chrome window:
+1. Go to https://gemini.google.com/
+2. Log in to your Google account
+3. Open any shared conversation to verify it works
+
+**Step 1c:** Run the login command:
 ```bash
 python gemini_scraper.py --login --use-chrome
 ```
 
-This uses your existing Chrome browser profile (where you're already logged in to Google), avoiding the "This browser may not be secure" error.
-
-**Important:** Close all Chrome windows before running this command.
-
-The script will:
-1. Open Chrome with your existing profile
-2. Navigate to Gemini to verify access
-3. Save cookies for future batch scraping
-
-Alternative (if you don't have Chrome):
-```bash
-python gemini_scraper.py --login
-```
+This extracts cookies from your authenticated Chrome session for batch scraping.
 
 ### Step 2: Create URL List
 
@@ -155,11 +164,13 @@ For batch scraping, files are saved as:
 
 ### "This browser or app may not be secure"
 
-Google blocks login from automated browsers. Use the `--use-chrome` flag:
-```bash
-python gemini_scraper.py --login --use-chrome
-```
-This uses your existing Chrome profile where you're already logged in.
+Google blocks login from automated browsers. Use `--use-chrome` to connect to your regular Chrome:
+
+1. Start Chrome with: `google-chrome --remote-debugging-port=9222`
+2. Log in to Google in that browser
+3. Run: `python gemini_scraper.py --login --use-chrome`
+
+See "Step 1" above for detailed instructions.
 
 ### "No saved session found"
 
