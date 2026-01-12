@@ -1,13 +1,32 @@
-# Gemini Conversation Scraper
+# LLM Conversation Scraper
 
-Scrapes exported Google Gemini conversations and formats them as clean User/Model dialogue.
+Scrapes AI conversations from Gemini, ChatGPT, Claude, and other LLM platforms. Formats them as clean User/Model dialogue.
+
+## Features
+
+- 🤖 **Multi-platform support** - Gemini, ChatGPT, Claude
+- 🎯 **Template system** - Predefined extraction rules for major platforms
+- 📦 **Batch processing** - Scrape thousands of URLs automatically
+- 🔐 **Authentication** - Save and reuse browser sessions
+- 🔧 **Custom selectors** - For platforms not covered by templates
+
+## Supported Platforms
+
+| Platform | Template | Automated Scraping | Authentication |
+|----------|----------|-------------------|----------------|
+| **Gemini** | `gemini` | ✅ Yes | Required (use `--login --use-chrome`) |
+| **ChatGPT** | `chatgpt` | ✅ Yes | Not required for public shares |
+| **Claude** | `claude` | ❌ No (Cloudflare) | Manual HTML download required |
 
 ## Output Format
 
 ```
 User: something user said
+
 Model: something model said
+
 User: something user said
+
 Model: something model said
 ```
 
@@ -20,7 +39,15 @@ pip install -r requirements.txt
 python -m playwright install chromium
 ```
 
-## Quick Start: Batch Scraping (Recommended for Many URLs)
+## Quick Start
+
+### List Available Templates
+
+```bash
+python gemini_scraper.py --list-templates
+```
+
+### Gemini: Batch Scraping (Requires Authentication)
 
 For scraping thousands of conversations automatically:
 
@@ -68,7 +95,7 @@ https://gemini.google.com/share/ghi789
 ### Step 3: Run Batch Scraping
 
 ```bash
-python gemini_scraper.py --batch urls.txt --output-dir ./conversations
+python gemini_scraper.py --batch urls.txt --template gemini --output-dir ./conversations
 ```
 
 This will:
@@ -78,20 +105,44 @@ This will:
 - Track progress and resume if interrupted
 - Show statistics when complete
 
+### ChatGPT: Public Shares (No Authentication)
+
+For publicly shared ChatGPT conversations:
+
+```bash
+# Create urls.txt with ChatGPT share URLs
+echo "https://chatgpt.com/share/def456" > chatgpt_urls.txt
+
+# Batch scrape (no authentication needed for public shares)
+python gemini_scraper.py --batch chatgpt_urls.txt --template chatgpt --output-dir ./conversations
+```
+
+### Claude: Manual HTML Download (Cloudflare Protection)
+
+Claude.ai uses Cloudflare protection that blocks automated scraping. Workaround:
+
+```bash
+# 1. Manually open the Claude conversation URL in your browser
+# 2. Complete any Cloudflare challenges ("Verify you are human")
+# 3. Save the page as HTML (Ctrl+S / Cmd+S)
+# 4. Parse the saved file
+python gemini_scraper.py --file claude_conversation.html --template claude
+```
+
 ### Batch Options
 
 ```bash
 # Run with visible browser (for debugging)
-python gemini_scraper.py --batch urls.txt --output-dir ./out --no-headless
+python gemini_scraper.py --batch urls.txt --template gemini --no-headless
 
 # Custom delays between requests
-python gemini_scraper.py --batch urls.txt --delay-min 3 --delay-max 8
+python gemini_scraper.py --batch urls.txt --template chatgpt --delay-min 3 --delay-max 8
 
 # Output as JSON instead of text
-python gemini_scraper.py --batch urls.txt --json
+python gemini_scraper.py --batch urls.txt --template gemini --json
 
 # Start fresh (don't skip already-scraped URLs)
-python gemini_scraper.py --batch urls.txt --no-resume
+python gemini_scraper.py --batch urls.txt --template chatgpt --no-resume
 ```
 
 ## Other Usage Methods
@@ -131,11 +182,13 @@ python gemini_scraper.py --batch urls.txt \
 
 | Option | Description |
 |--------|-------------|
+| `--list-templates` | List all available templates and exit |
+| `--template, -t` | Use predefined template (gemini, chatgpt, claude) |
 | `--login` | Open browser to login and save session |
 | `--use-chrome` | Use existing Chrome profile (avoids login issues) |
 | `--batch FILE` | Batch scrape URLs from file |
 | `--file, -f` | Path to local HTML file |
-| `--url, -u` | Single Gemini share URL (with --browser) |
+| `--url, -u` | Single share URL (with --browser) |
 | `--browser, -b` | Use Playwright browser |
 | `--output-dir, -d` | Output directory for batch mode |
 | `--delay-min` | Min delay between requests (default: 2.0s) |
@@ -143,9 +196,9 @@ python gemini_scraper.py --batch urls.txt \
 | `--no-headless` | Show browser window |
 | `--no-resume` | Don't skip already-scraped URLs |
 | `--analyze, -a` | Analyze HTML structure |
-| `--container, -c` | CSS selector for message containers |
-| `--user-selector` | CSS selector for user messages |
-| `--model-selector` | CSS selector for model messages |
+| `--container, -c` | CSS selector for message containers (custom) |
+| `--user-selector` | CSS selector for user messages (custom) |
+| `--model-selector` | CSS selector for model messages (custom) |
 | `--output, -o` | Output file (single URL/file mode) |
 | `--json` | Output as JSON |
 
@@ -193,8 +246,55 @@ Re-run `--login` to refresh your session.
 
 Increase delays between requests:
 ```bash
-python gemini_scraper.py --batch urls.txt --delay-min 5 --delay-max 10
+python gemini_scraper.py --batch urls.txt --template gemini --delay-min 5 --delay-max 10
 ```
+
+### Cloudflare Challenge ("Verify you are human")
+
+Some platforms (like Claude) use Cloudflare protection that blocks automation.
+
+**Error message:** `"Cloudflare challenge detected - this site blocks automated scraping"`
+
+**Solution:** Manual HTML download:
+1. Open the URL in your browser
+2. Complete the Cloudflare challenge
+3. Save the page as HTML (File → Save Page As, or Ctrl+S / Cmd+S)
+4. Parse the saved file:
+   ```bash
+   python gemini_scraper.py --file saved.html --template claude
+   ```
+
+## Creating Custom Templates
+
+For platforms not covered by built-in templates, you can:
+
+1. **Analyze the HTML structure:**
+   ```bash
+   python gemini_scraper.py --file conversation.html --analyze
+   ```
+
+2. **Use custom selectors:**
+   ```bash
+   python gemini_scraper.py --batch urls.txt \
+     --container ".message-wrapper" \
+     --user-selector ".human-message" \
+     --model-selector ".ai-message"
+   ```
+
+3. **Or add to `TEMPLATES` in `gemini_scraper.py`:**
+   ```python
+   "myplatform": {
+       "name": "My Platform",
+       "structure": "attribute-based",
+       "container": "article.message",
+       "role_attribute": "data-role",
+       "role_mapping": {
+           "user": "User",
+           "assistant": "Model",
+       },
+       "description": "For My Platform conversations"
+   }
+   ```
 
 ## License
 
