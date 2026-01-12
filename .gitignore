@@ -3,3 +3,18 @@ __pycache__/
 *.pyo
 .env
 debug_gemini_page.html
+
+# macOS
+.DS_Store
+
+# URL files
+url.txt
+urls.txt
+
+# Output directories
+conversations/
+gemini_conversations/
+
+# Example files
+example_conversation.html
+example_conversation_files/

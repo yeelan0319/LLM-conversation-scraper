@@ -711,7 +711,7 @@ def format_conversation(conversations: list[tuple[str, str]]) -> str:
         message = re.sub(r'\n{3,}', '\n\n', message)  # Remove excessive newlines
         message = message.strip()
         output.append(f"{role}: {message}")
-    return "\n".join(output)
+    return "\n\n".join(output)  # Use double newline to separate messages clearly
 
 
 def main():
