@@ -54,12 +54,12 @@ TEMPLATES = {
     "claude": {
         "name": "Claude Conversations",
         "structure": "class-based",
-        "container": ".font-claude-response, .font-user-message",
+        "container": "[class*='font-user-message'], .font-claude-response",
         "role_classes": {
-            "user": ["font-user-message", "user-message"],
-            "model": ["font-claude-response", "claude-response", "assistant-message"],
+            "user": ["font-user-message"],
+            "model": ["font-claude-response", "claude-response"],
         },
-        "description": "For Claude conversation exports"
+        "description": "For Claude conversation pages (claude.ai)"
     },
 }
 
