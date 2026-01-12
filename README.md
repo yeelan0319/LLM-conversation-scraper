@@ -17,7 +17,7 @@ Model: something model said
 pip install -r requirements.txt
 
 # Install browser for Playwright
-playwright install chromium
+python -m playwright install chromium
 ```
 
 ## Quick Start: Batch Scraping (Recommended for Many URLs)
@@ -27,10 +27,22 @@ For scraping thousands of conversations automatically:
 ### Step 1: Login Once
 
 ```bash
-python gemini_scraper.py --login
+python gemini_scraper.py --login --use-chrome
 ```
 
-This opens a browser window. Log in to your Google account, then press Enter. Your session is saved for future use.
+This uses your existing Chrome browser profile (where you're already logged in to Google), avoiding the "This browser may not be secure" error.
+
+**Important:** Close all Chrome windows before running this command.
+
+The script will:
+1. Open Chrome with your existing profile
+2. Navigate to Gemini to verify access
+3. Save cookies for future batch scraping
+
+Alternative (if you don't have Chrome):
+```bash
+python gemini_scraper.py --login
+```
 
 ### Step 2: Create URL List
 
@@ -111,6 +123,7 @@ python gemini_scraper.py --batch urls.txt \
 | Option | Description |
 |--------|-------------|
 | `--login` | Open browser to login and save session |
+| `--use-chrome` | Use existing Chrome profile (avoids login issues) |
 | `--batch FILE` | Batch scrape URLs from file |
 | `--file, -f` | Path to local HTML file |
 | `--url, -u` | Single Gemini share URL (with --browser) |
@@ -140,11 +153,19 @@ For batch scraping, files are saved as:
 
 ## Troubleshooting
 
+### "This browser or app may not be secure"
+
+Google blocks login from automated browsers. Use the `--use-chrome` flag:
+```bash
+python gemini_scraper.py --login --use-chrome
+```
+This uses your existing Chrome profile where you're already logged in.
+
 ### "No saved session found"
 
 Run `--login` first to authenticate:
 ```bash
-python gemini_scraper.py --login
+python gemini_scraper.py --login --use-chrome
 ```
 
 ### "No messages found"
