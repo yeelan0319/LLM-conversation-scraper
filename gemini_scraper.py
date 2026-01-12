@@ -622,8 +622,35 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     """
     conversations = []
 
-    # Strategy 1: Look for elements with turn/message-related classes
-    # Common patterns in Google's chat interfaces
+    # Strategy 0: Look for data-message-author attribute (common in Gemini)
+    messages_with_author = soup.find_all(attrs={"data-message-author": True})
+    if messages_with_author:
+        for elem in messages_with_author:
+            author = elem.get("data-message-author", "").lower()
+            text = elem.get_text(separator="\n", strip=True)
+            if text and len(text) > 5:
+                role = "User" if "user" in author or "human" in author else "Model"
+                conversations.append((role, text))
+        if conversations:
+            return conversations
+
+    # Strategy 1: Look for message containers with role attributes
+    for elem in soup.find_all(attrs={"role": "listitem"}):
+        text = elem.get_text(separator="\n", strip=True)
+        if text and len(text) > 5:
+            # Check for user/model indicators in classes or data attributes
+            classes = " ".join(elem.get("class", [])).lower()
+            role = "Model"
+            if "user" in classes or "query" in classes:
+                role = "User"
+            # Check siblings or structure for role hints
+            conversations.append((role, text))
+
+    if conversations:
+        return conversations
+
+    # Strategy 2: Look for specific Gemini conversation patterns
+    # Try to find turn containers
     potential_messages = []
 
     # Look for query-response pairs common in Gemini
@@ -644,7 +671,7 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     if potential_messages:
         return potential_messages
 
-    # Strategy 2: Look for message-text or similar content classes
+    # Strategy 3: Look for message-text or similar content classes
     for elem in soup.find_all(class_=lambda x: x and "message" in " ".join(x).lower()):
         classes = " ".join(elem.get("class", [])).lower()
         text = elem.get_text(separator="\n", strip=True)
@@ -678,33 +705,88 @@ def extract_with_selectors(
     containers = soup.select(container_selector)
 
     for container in containers:
-        # Determine role
-        role = "Model"  # Default
-        if user_selector and container.select_one(user_selector):
-            role = "User"
-        elif model_selector and container.select_one(model_selector):
-            role = "Model"
+        # Check if container has both user and model content (turn-based structure)
+        user_elem = container.select_one(user_selector) if user_selector else None
+        model_elem = container.select_one(model_selector) if model_selector else None
+
+        if user_elem and model_elem:
+            # This container has both user and model - extract them separately
+            # Extract user message
+            user_text = user_elem.get_text(separator="\n", strip=True)
+            if user_text and len(user_text) > 5:
+                conversations.append(("User", user_text))
+
+            # Extract model message
+            model_text = model_elem.get_text(separator="\n", strip=True)
+            if model_text and len(model_text) > 5:
+                conversations.append(("Model", model_text))
+
         else:
-            # Check class names
-            classes = " ".join(container.get("class", [])).lower()
-            if "user" in classes or "query" in classes or "human" in classes:
+            # Single role container - use original logic
+            role = "Model"  # Default
+            if user_elem:
                 role = "User"
+            elif model_elem:
+                role = "Model"
+            else:
+                # Check class names
+                classes = " ".join(container.get("class", [])).lower()
+                if "user" in classes or "query" in classes or "human" in classes:
+                    role = "User"
 
-        # Extract content
-        if content_selector:
-            content_elem = container.select_one(content_selector)
-            text = content_elem.get_text(separator="\n", strip=True) if content_elem else ""
-        else:
-            text = container.get_text(separator="\n", strip=True)
+            # Extract content
+            if content_selector:
+                content_elem = container.select_one(content_selector)
+                text = content_elem.get_text(separator="\n", strip=True) if content_elem else ""
+            else:
+                text = container.get_text(separator="\n", strip=True)
 
-        if text and len(text) > 5:
-            conversations.append((role, text))
+            if text and len(text) > 5:
+                conversations.append((role, text))
+
+    return conversations
+
+
+def split_combined_conversation(text: str) -> list[tuple[str, str]]:
+    """
+    Attempt to split a combined conversation text into individual turns.
+    This is a fallback for when all conversation is extracted as one block.
+    """
+    # First try splitting by double newlines
+    chunks = re.split(r'\n\n+', text.strip())
+
+    # If we only got one chunk, try single newlines
+    if len(chunks) <= 1:
+        chunks = text.strip().split('\n')
+
+    conversations = []
+    current_role = "User"  # Conversations typically start with user
+
+    for i, chunk in enumerate(chunks):
+        chunk = chunk.strip()
+        if not chunk or len(chunk) < 5:
+            continue
+
+        # Alternate between User and Model
+        conversations.append((current_role, chunk))
+        current_role = "Model" if current_role == "User" else "User"
 
     return conversations
 
 
 def format_conversation(conversations: list[tuple[str, str]]) -> str:
     """Format conversations as User/Model dialogue."""
+    # Check if we have a single large message that might be a combined conversation
+    if len(conversations) == 1:
+        role, message = conversations[0]
+        # If message contains multiple paragraphs separated by blank lines,
+        # it might be a combined conversation
+        if '\n\n' in message or message.count('\n') > 10:
+            # Try to split it
+            split_convs = split_combined_conversation(message)
+            if len(split_convs) > 1:
+                conversations = split_convs
+
     output = []
     for role, message in conversations:
         # Clean up the message
