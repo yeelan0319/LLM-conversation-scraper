@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Optional
 
 from bs4 import BeautifulSoup
+from markdownify import markdownify as md
 
 
 # Conversation extraction templates for different platforms
@@ -67,6 +68,40 @@ TEMPLATES = {
 # Default paths
 SESSION_DIR = Path.home() / ".gemini_scraper_session"
 DEFAULT_OUTPUT_DIR = Path("./gemini_conversations")
+
+
+def extract_text_from_element(element, use_markdown: bool = False) -> str:
+    """
+    Extract text from a BeautifulSoup element, optionally converting to Markdown.
+
+    Args:
+        element: BeautifulSoup element to extract text from
+        use_markdown: If True, convert HTML to Markdown preserving formatting
+
+    Returns:
+        Extracted text as plain text or Markdown
+    """
+    if not element:
+        return ""
+
+    if use_markdown:
+        # Convert HTML to Markdown
+        # This preserves inline code, code blocks, links, bold, italic, lists, etc.
+        markdown_text = md(
+            str(element),
+            heading_style="ATX",  # Use # for headings
+            bullets="-",  # Use - for unordered lists
+            code_language="",  # Don't add language hints to code blocks
+            strip=['script', 'style'],  # Remove script and style tags
+        )
+
+        # Clean up excessive newlines (more than 2 consecutive)
+        markdown_text = re.sub(r'\n{3,}', '\n\n', markdown_text)
+
+        return markdown_text.strip()
+    else:
+        # Plain text extraction (original behavior)
+        return element.get_text(separator="\n", strip=True)
 
 
 def find_chrome_user_data_dir() -> Optional[Path]:
@@ -347,7 +382,8 @@ def scrape_single_url(
     container_selector: Optional[str] = None,
     user_selector: Optional[str] = None,
     model_selector: Optional[str] = None,
-    content_selector: Optional[str] = None
+    content_selector: Optional[str] = None,
+    use_markdown: bool = False
 ) -> list[tuple[str, str]]:
     """
     Scrape a single URL and return conversations.
@@ -356,13 +392,13 @@ def scrape_single_url(
     soup = BeautifulSoup(html_content, "lxml")
 
     if template:
-        return extract_with_template(soup, template)
+        return extract_with_template(soup, template, use_markdown)
     elif container_selector:
         return extract_with_selectors(
-            soup, container_selector, user_selector, model_selector, content_selector
+            soup, container_selector, user_selector, model_selector, content_selector, use_markdown
         )
     else:
-        return extract_conversations_auto(soup)
+        return extract_conversations_auto(soup, use_markdown)
 
 
 def batch_scrape(
@@ -378,6 +414,7 @@ def batch_scrape(
     model_selector: Optional[str] = None,
     content_selector: Optional[str] = None,
     output_json: bool = False,
+    use_markdown: bool = False,
     resume: bool = True
 ) -> dict:
     """
@@ -556,14 +593,14 @@ def batch_scrape(
 
                     # Extract conversations
                     if template:
-                        conversations = extract_with_template(soup, template)
+                        conversations = extract_with_template(soup, template, use_markdown)
                     elif container_selector:
                         conversations = extract_with_selectors(
                             soup, container_selector, user_selector,
-                            model_selector, content_selector
+                            model_selector, content_selector, use_markdown
                         )
                     else:
-                        conversations = extract_conversations_auto(soup)
+                        conversations = extract_conversations_auto(soup, use_markdown)
 
                     if not conversations:
                         # Check if it's a consent page
@@ -725,10 +762,14 @@ def analyze_html_structure(soup: BeautifulSoup) -> dict:
     return analysis
 
 
-def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
+def extract_conversations_auto(soup: BeautifulSoup, use_markdown: bool = False) -> list[tuple[str, str]]:
     """
     Attempt to auto-detect and extract conversations from Gemini HTML.
     Returns list of (role, message) tuples.
+
+    Args:
+        soup: BeautifulSoup object of the HTML
+        use_markdown: If True, convert HTML to Markdown preserving formatting
     """
     conversations = []
 
@@ -737,7 +778,7 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     if messages_with_author:
         for elem in messages_with_author:
             author = elem.get("data-message-author", "").lower()
-            text = elem.get_text(separator="\n", strip=True)
+            text = extract_text_from_element(elem, use_markdown)
             if text and len(text) > 5:
                 role = "User" if "user" in author or "human" in author else "Model"
                 conversations.append((role, text))
@@ -746,7 +787,7 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
 
     # Strategy 1: Look for message containers with role attributes
     for elem in soup.find_all(attrs={"role": "listitem"}):
-        text = elem.get_text(separator="\n", strip=True)
+        text = extract_text_from_element(elem, use_markdown)
         if text and len(text) > 5:
             # Check for user/model indicators in classes or data attributes
             classes = " ".join(elem.get("class", [])).lower()
@@ -767,14 +808,14 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     for elem in soup.find_all(class_=lambda x: x and any(
         kw in " ".join(x).lower() for kw in ["query", "prompt", "user-message", "human"]
     )):
-        text = elem.get_text(separator="\n", strip=True)
+        text = extract_text_from_element(elem, use_markdown)
         if text and len(text) > 5:
             potential_messages.append(("User", text))
 
     for elem in soup.find_all(class_=lambda x: x and any(
         kw in " ".join(x).lower() for kw in ["response", "model-response", "assistant", "answer"]
     )):
-        text = elem.get_text(separator="\n", strip=True)
+        text = extract_text_from_element(elem, use_markdown)
         if text and len(text) > 5:
             potential_messages.append(("Model", text))
 
@@ -784,7 +825,7 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     # Strategy 3: Look for message-text or similar content classes
     for elem in soup.find_all(class_=lambda x: x and "message" in " ".join(x).lower()):
         classes = " ".join(elem.get("class", [])).lower()
-        text = elem.get_text(separator="\n", strip=True)
+        text = extract_text_from_element(elem, use_markdown)
         if text and len(text) > 10:
             # Try to determine role from classes or parent elements
             role = "Model"  # Default
@@ -795,13 +836,14 @@ def extract_conversations_auto(soup: BeautifulSoup) -> list[tuple[str, str]]:
     return conversations
 
 
-def extract_with_template(soup: BeautifulSoup, template_name: str) -> list[tuple[str, str]]:
+def extract_with_template(soup: BeautifulSoup, template_name: str, use_markdown: bool = False) -> list[tuple[str, str]]:
     """
     Extract conversations using a predefined template.
 
     Args:
         soup: BeautifulSoup object of the HTML
         template_name: Name of the template to use (from TEMPLATES dict)
+        use_markdown: If True, convert HTML to Markdown preserving formatting
 
     Returns:
         List of (role, message) tuples
@@ -819,7 +861,8 @@ def extract_with_template(soup: BeautifulSoup, template_name: str) -> list[tuple
             template["container"],
             template.get("user_selector"),
             template.get("model_selector"),
-            template.get("content_selector")
+            template.get("content_selector"),
+            use_markdown
         )
 
     elif structure == "attribute-based":
@@ -831,7 +874,7 @@ def extract_with_template(soup: BeautifulSoup, template_name: str) -> list[tuple
 
         for container in containers:
             attr_value = container.get(role_attr, "").lower()
-            text = container.get_text(separator="\n", strip=True)
+            text = extract_text_from_element(container, use_markdown)
 
             if not text or len(text) < 5:
                 continue
@@ -851,7 +894,7 @@ def extract_with_template(soup: BeautifulSoup, template_name: str) -> list[tuple
         for container in containers:
             classes = container.get("class", [])
             class_str = " ".join(classes).lower()
-            text = container.get_text(separator="\n", strip=True)
+            text = extract_text_from_element(container, use_markdown)
 
             if not text or len(text) < 5:
                 continue
@@ -879,7 +922,8 @@ def extract_with_selectors(
     container_selector: str,
     user_selector: Optional[str] = None,
     model_selector: Optional[str] = None,
-    content_selector: Optional[str] = None
+    content_selector: Optional[str] = None,
+    use_markdown: bool = False
 ) -> list[tuple[str, str]]:
     """
     Extract conversations using custom CSS selectors.
@@ -889,6 +933,7 @@ def extract_with_selectors(
         user_selector: CSS selector to identify user messages (within container)
         model_selector: CSS selector to identify model messages (within container)
         content_selector: CSS selector for message content within container
+        use_markdown: If True, convert HTML to Markdown preserving formatting
     """
     conversations = []
     containers = soup.select(container_selector)
@@ -901,12 +946,12 @@ def extract_with_selectors(
         if user_elem and model_elem:
             # This container has both user and model - extract them separately
             # Extract user message
-            user_text = user_elem.get_text(separator="\n", strip=True)
+            user_text = extract_text_from_element(user_elem, use_markdown)
             if user_text and len(user_text) > 5:
                 conversations.append(("User", user_text))
 
             # Extract model message
-            model_text = model_elem.get_text(separator="\n", strip=True)
+            model_text = extract_text_from_element(model_elem, use_markdown)
             if model_text and len(model_text) > 5:
                 conversations.append(("Model", model_text))
 
@@ -926,9 +971,9 @@ def extract_with_selectors(
             # Extract content
             if content_selector:
                 content_elem = container.select_one(content_selector)
-                text = content_elem.get_text(separator="\n", strip=True) if content_elem else ""
+                text = extract_text_from_element(content_elem, use_markdown) if content_elem else ""
             else:
-                text = container.get_text(separator="\n", strip=True)
+                text = extract_text_from_element(container, use_markdown)
 
             if text and len(text) > 5:
                 conversations.append((role, text))
@@ -1139,6 +1184,11 @@ Examples:
         action="store_true",
         help="Output as JSON instead of formatted text"
     )
+    parser.add_argument(
+        "--markdown", "-m",
+        action="store_true",
+        help="Output as Markdown, preserving formatting (inline code, code blocks, links, etc.)"
+    )
 
     args = parser.parse_args()
 
@@ -1174,6 +1224,7 @@ Examples:
             model_selector=args.model_selector,
             content_selector=args.content_selector,
             output_json=args.json,
+            use_markdown=args.markdown,
             resume=not args.no_resume
         )
         return
@@ -1230,7 +1281,7 @@ Examples:
     # Extract conversations
     if args.template:
         print(f"Extracting with template: {args.template}")
-        conversations = extract_with_template(soup, args.template)
+        conversations = extract_with_template(soup, args.template, args.markdown)
     elif args.container:
         print("Extracting with custom selectors...")
         conversations = extract_with_selectors(
@@ -1238,11 +1289,12 @@ Examples:
             args.container,
             args.user_selector,
             args.model_selector,
-            args.content_selector
+            args.content_selector,
+            args.markdown
         )
     else:
         print("Attempting auto-detection of conversation structure...")
-        conversations = extract_conversations_auto(soup)
+        conversations = extract_conversations_auto(soup, args.markdown)
 
     if not conversations:
         print("\nNo conversations found with auto-detection.")
