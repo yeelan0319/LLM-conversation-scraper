@@ -1,13 +1,16 @@
 # Gemini Conversation Scraper
 
-Scrapes exported Google Gemini conversations and formats them as clean User/Model dialogue.
+Scrapes exported LLM conversations and formats them as clean User/Model dialogue.
 
 ## Output Format
 
 ```
 User: something user said
+
 Model: something model said
+
 User: something user said
+
 Model: something model said
 ```
 
@@ -32,13 +35,10 @@ To avoid Google's "browser not secure" block, use `--use-chrome` which connects 
 
 ```bash
 # macOS
-/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222
+/Applications/Google\ Chrome.app/Contents/MacOS/Google\ Chrome --remote-debugging-port=9222  --user-data-dir=/Users/$USER/testbrowser
 
 # Linux
-google-chrome --remote-debugging-port=9222
-
-# Windows
-"C:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=9222
+google-chrome --remote-debugging-port=9222 --user-data-dir=/Users/$USER/testbrowser
 ```
 
 **Step 1b:** In that Chrome window:
@@ -55,21 +55,25 @@ This extracts cookies from your authenticated Chrome session for batch scraping.
 
 ### Step 2: Create URL List
 
-Create a text file with your Gemini share URLs (one per line):
+Create a text file with your share URLs (one per line), and right now one file per HTML structure:
 
 ```
-# urls.txt
+# gemini.txt
 https://gemini.google.com/share/abc123
 https://gemini.google.com/share/def456
 https://gemini.google.com/share/ghi789
 # Lines starting with # are ignored
-```
 
 ### Step 3: Run Batch Scraping
 
+Right now, the scraper support 3 types of LLMs (HTML structures) out of box:
+
+- Gemini (template `gemini`)
+- Claude (template `claude`)
+- ChatGPT (template `chatgpt`)
+
 ```bash
-python gemini_scraper.py --batch urls.txt --output-dir ./conversations
-```
+python gemini_scraper.py --batch gemini.txt --template=gemini --output-dir ./gemini-conversations
 
 This will:
 - Scrape each URL automatically using your saved session
@@ -77,6 +81,10 @@ This will:
 - Save each conversation to a separate file
 - Track progress and resume if interrupted
 - Show statistics when complete
+
+### Markdown
+
+While the default behavior is to extract the conversation as plain text, since LLM can output complicated format response, markdown is supported and recommended in extraction by providing additional flat `--markdown`.
 
 ### Batch Options
 
@@ -122,9 +130,9 @@ python gemini_scraper.py --file conversation.html --analyze
 
 ```bash
 python gemini_scraper.py --batch urls.txt \
-  --container ".message-container" \
-  --user-selector ".user-query" \
-  --model-selector ".model-response"
+  --container ".chat-history" \
+  --user-selector ".query-text-line" \
+  --model-selector ".response-container-content"
 ```
 
 ## Command Line Reference

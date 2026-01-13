@@ -10,10 +10,15 @@ debug_gemini_page.html
 # URL files
 url.txt
 urls.txt
+gemini.txt
+claude.txt
+gpt.txt
 
 # Output directories
 conversations/
-gemini_conversations/
+gemini-conversations/
+claude-conversations/
+gpt-conversations/
 
 # Example files
 example_conversation.html
