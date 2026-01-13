@@ -63,6 +63,7 @@ https://gemini.google.com/share/abc123
 https://gemini.google.com/share/def456
 https://gemini.google.com/share/ghi789
 # Lines starting with # are ignored
+```
 
 ### Step 3: Run Batch Scraping
 
@@ -74,6 +75,7 @@ Right now, the scraper support 3 types of LLMs (HTML structures) out of box:
 
 ```bash
 python gemini_scraper.py --batch gemini.txt --template=gemini --output-dir ./gemini-conversations
+```
 
 This will:
 - Scrape each URL automatically using your saved session
