@@ -84,11 +84,20 @@ def extract_text_from_element(element, use_markdown: bool = False) -> str:
     if not element:
         return ""
 
+    # Create a copy to avoid modifying the original element
+    import copy
+    element_copy = copy.copy(element)
+
+    # Remove screen reader only elements (accessibility labels)
+    # These include elements with classes like 'sr-only', 'visually-hidden', etc.
+    for sr_element in element_copy.find_all(class_=['sr-only', 'visually-hidden', 'screen-reader-only', 'screen-reader-text']):
+        sr_element.decompose()
+
     if use_markdown:
         # Convert HTML to Markdown
         # This preserves inline code, code blocks, links, bold, italic, lists, etc.
         markdown_text = md(
-            str(element),
+            str(element_copy),
             heading_style="ATX",  # Use # for headings
             bullets="-",  # Use - for unordered lists
             code_language="",  # Don't add language hints to code blocks
@@ -101,7 +110,7 @@ def extract_text_from_element(element, use_markdown: bool = False) -> str:
         return markdown_text.strip()
     else:
         # Plain text extraction (original behavior)
-        return element.get_text(separator="\n", strip=True)
+        return element_copy.get_text(separator="\n", strip=True)
 
 
 def find_chrome_user_data_dir() -> Optional[Path]:
@@ -413,7 +422,7 @@ def batch_scrape(
     user_selector: Optional[str] = None,
     model_selector: Optional[str] = None,
     content_selector: Optional[str] = None,
-    output_json: bool = False,
+    output_json: bool = True,
     use_markdown: bool = False,
     resume: bool = True
 ) -> dict:
@@ -1182,7 +1191,13 @@ Examples:
     parser.add_argument(
         "--json",
         action="store_true",
-        help="Output as JSON instead of formatted text"
+        default=True,
+        help="Output as JSON (default format)"
+    )
+    parser.add_argument(
+        "--text",
+        action="store_true",
+        help="Output as plain text instead of JSON"
     )
     parser.add_argument(
         "--markdown", "-m",
@@ -1223,7 +1238,7 @@ Examples:
             user_selector=args.user_selector,
             model_selector=args.model_selector,
             content_selector=args.content_selector,
-            output_json=args.json,
+            output_json=not args.text,
             use_markdown=args.markdown,
             resume=not args.no_resume
         )
@@ -1305,14 +1320,15 @@ Examples:
     print(f"\nFound {len(conversations)} messages")
 
     # Format output
-    if args.json:
+    # Default to JSON unless --text is specified
+    if args.text:
+        output = format_conversation(conversations)
+    else:
         output = json.dumps(
             [{"role": role, "content": msg} for role, msg in conversations],
             indent=2,
             ensure_ascii=False
         )
-    else:
-        output = format_conversation(conversations)
 
     # Write output
     if args.output:
